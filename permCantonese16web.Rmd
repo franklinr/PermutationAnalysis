@@ -1,0 +1,552 @@
+---
+title: "Cantonese"
+output:
+  html_document: 
+    fig_width: 9
+  word_document: default
+---
+
+This is final permutation and mixed model analysis for Chan, Yang, Chang, & Kidd (in press)
+
+```{r}
+knitr::opts_chunk$set(warning = FALSE)
+require(ggplot2)
+require(lme4)
+require(stringr)
+require(nlme)         ## for lme()
+require(lsmeans)      ## for lsmeans()
+require(multcomp)  ## for multiple comparison stuff
+require(remef)
+print(R.version.string)
+print(sessionInfo())
+
+apaformat <- function(p){
+     p = p + theme_bw() # make the theme black-and-white rather than grey (do this before font changes, or it overrides them)
+     p = p + theme(
+          panel.grid.major = element_blank(), # switch off major gridlines
+          panel.grid.minor = element_blank(), # switch off minor gridlines
+          legend.key = element_blank() # switch off the rectangle around symbols in the legend
+     )
+     return(p)
+}
+
+# Create a data frame with onset-offset data for each condition in study
+onsetStimCL = data.frame(SentenceType=c(rep("Subject",3),rep("Object",4)),cat = c("VN","D CL","Head","N","V","D CL","Head"), onset=c(0,0.625,0.91,0,0.412,0.661,0.925))
+onsetStimCL$HeadNoun = "CL"
+onsetStimGE = data.frame(SentenceType=c(rep("Subject",3),rep("Object",4)),cat = c("VN","ge","Head","N","V","ge","Head"), onset=c(0,0.741,0.899,0,0.488,0.756,0.939))
+onsetStimGE$HeadNoun = "ge3"
+onsetStim = rbind(onsetStimCL,onsetStimGE)
+onsetStim$time = onsetStim$onset * 1000
+onsetStim$time2=c(onsetStim$time[2:length(onsetStim$time)],0)
+onsetStim$time2[onsetStim$cat=="Head"] = 1000*c(1.477,1.387,1.454,1.477)
+onsetStim$time2 = c(622,907,1497,  409,658,922,1387,  738, 896, 1454,  485,753, 936, 1477)
+onsetStim$ypos = rep(c(0.95,0.95,0.95,0.75,0.75,0.75,0.75),2)
+onsetStim$target = 1
+onsetStim$restarg = 0
+onsetStim[onsetStim$cat=="Head",]
+
+aggregate(time2 ~ HeadNoun + cat, onsetStim, mean)
+
+# load eye-tracking data
+bothdata=read.csv("CanRCeyetracking data-19 for CL &18 for GE-only TTR longer than 200ms.csv")
+bothdata$HeadNoun <- factor(bothdata$HeadNoun,labels=c("CL","ge3"))
+bothdata$SentenceType=factor(bothdata$SentenceType,labels=c("Subject","Object"),levels=c("subject","object"))
+
+bothdata$Item = str_replace(bothdata$Item,"(S|O)","I")
+bothdata$time = as.numeric(as.character(bothdata$time))
+bothdata$time = bothdata$time * 1000
+bothdata$target = bothdata$T
+
+xtabs(~ Item + HeadNoun, bothdata)
+xtabs(~ Item + SentenceType, bothdata)
+
+# Figure to see raw data
+means.df = aggregate(cbind(target) ~ time + HeadNoun + SentenceType, bothdata, mean)
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Target Proportions")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(data=onsetStim,aes(xmin=time,xmax = time2-33, ymin=ypos-0.13, ymax=ypos,colour=SentenceType),fill=NA, show.legend=FALSE)
+p = p + geom_text(data=onsetStim,aes(x=(time+time2)/2, y=ypos-0.05, label=cat),hjust=0.7,size=3,show.legend=FALSE)
+p
+```
+
+Above is the raw data, below we remove the mean of time 0.
+
+```{r}
+meansubset = subset(bothdata,time == 0)
+meanpartitemdf = aggregate(target ~  Participant + Item + HeadNoun + SentenceType, meansubset, mean)
+both = merge(bothdata,meanpartitemdf, all.x=TRUE,by=c("Participant","Item","HeadNoun","SentenceType"),sort=F)
+both$target = both$target.x-both$target.y
+# plot figure for dataset
+means.df = aggregate(cbind(target) ~ time + HeadNoun + SentenceType, both, mean)
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Looks to target")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(data=onsetStim,aes(xmin=time,xmax = time2-33, ymin=ypos-0.13, ymax=ypos,colour=SentenceType),fill=NA, show.legend=FALSE)
+p = p + geom_text(data=onsetStim,aes(x=(time+time2)/2, y=ypos-0.05, label=cat),size=3,show.legend=FALSE)
+p
+```
+
+Here is a mixed model analysis using 200 ms windows
+
+```{r}
+winsize = 200
+
+#unique(both$time)
+both$win = as.integer((both$time+10)/winsize)
+xtabs(~ win, both)
+both2 = subset(both, win != 12 & !is.na(time)) # not enough data in 12
+xtabs(~ win, both2)
+xtabs(~ Item + HeadNoun, both)
+xtabs(~ Participant + SentenceType, both)
+
+subjmeans.df = aggregate(target ~ win + HeadNoun + SentenceType + Participant + Item, both, mean)
+subjmeans.df$time=subjmeans.df$win*winsize
+subjmeans.df$cwin = subjmeans.df$win - mean(subjmeans.df$win)
+subjmeans.df$cCL = ifelse(subjmeans.df$HeadNoun == "CL",0.5,-0.5)
+subjmeans.df$cobject = ifelse(subjmeans.df$SentenceType == "Object",0.5,-0.5)
+subjmeans.df$Participant=factor(subjmeans.df$Participant)
+subjmeans.df$Item=factor(subjmeans.df$Item)
+mixmodel = lmer(target ~ cwin*cCL*cobject + (1 + SentenceType| Participant) + (1+SentenceType | Item), subjmeans.df)
+summixed=summary(mixmodel)
+print(summixed)
+
+clwin8 = subset(subjmeans.df, win==8 & HeadNoun == "CL")
+mixmodel8cl = lmer(target ~ cobject + (1+SentenceType | Participant) + (1+SentenceType | Item), clwin8)
+print(summary(mixmodel8cl))
+ge3win9 = subset(subjmeans.df, win==9 & HeadNoun == "ge3")
+ge3win10 = subset(subjmeans.df, win==10 & HeadNoun == "ge3")
+ge3win9$target2 = ge3win10$target
+print(cor(ge3win9$target,ge3win9$target2))
+```
+
+Since we have a significant three way interaction of HeadNoun, SentenceType, and window, we can do posthocs.
+We use lsmeans to do contrasts between obj and sub for each window in each HeadNoun.
+lsmeans also adjusts p automatically for the number of comparisons.
+
+```{r}
+options(contrasts = c("contr.treatment", "contr.poly"))
+subjmeans.df$win = factor(subjmeans.df$win)
+subjmeans.df$HeadNoun = factor(subjmeans.df$HeadNoun)
+subjmeans.df$SentenceType = factor(subjmeans.df$SentenceType)
+mixmodelFactor = lmer(target ~ win*SentenceType*HeadNoun + (1 + SentenceType| Participant) + (1+SentenceType | Item), subjmeans.df)
+model.lsmobj <- lsmeans(mixmodelFactor, ~ SentenceType | win*HeadNoun)
+posthocs = summary(as.glht(pairs(model.lsmobj)))
+print(posthocs)
+
+subjmeans.df$pred <- remef(mixmodelFactor, ran = "all")
+means2.df = aggregate(cbind(pred,target) ~ time + HeadNoun + SentenceType, subjmeans.df, mean)
+timelist = as.integer(unique(subjmeans.df$time))
+p = ggplot(means2.df , aes( x = time, y = target, colour=SentenceType))
+meanwin= data.frame(time= rep(timelist,2),HeadNoun=rep(c("CL","ge3"),each=length(timelist)))
+meanwin$pval = as.numeric(lapply(posthocs, function(x){ return( x$test$pvalues[1]) }) )
+meanwin$target = 0
+meanwin$pred =0
+meanwin$SentenceType = "Object"
+meansigPost = subset(meanwin,pval < 0.05) 
+# color them grey
+p = p + geom_rect(data=meansigPost,aes(xmin=time, xmax=time+winsize, ymin = 0, ymax= 1.0),,colour=NA,fill="grey90",show.legend=FALSE)
+p = p + geom_line()
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + scale_colour_brewer(palette="Set1")
+p = p + scale_fill_brewer(palette="Set2")
+p = p + geom_vline(xintercept = seq(0,2600,by=winsize),colour="black", linetype = 2)
+apaformat(p)
+```
+
+This is the permutation analysis
+
+```{r}
+# create copy of data frame
+pdata = both[!is.na(both$time),]
+wdivsize = 1
+pdata$cobject = ifelse(pdata$SentenceType == "Subject",0.5,-0.5)
+pdata$win = as.integer(pdata$time/wdivsize)
+pdata$time = pdata$win*wdivsize
+
+# create data frame which averages over subjects.  
+# This also stores the results of the permutation analysis
+means.df = aggregate(target ~ SentenceType + cobject + time + HeadNoun, pdata, mean)
+means.df$pstr = 1000
+
+# We do this for each timebin in the data
+timelist = unique(pdata$time)
+for (l in c("CL","ge3")){
+  for (t in timelist){
+    # create data frame for ONE timebin for each HeadNoun level
+    onetime = subset(pdata,time == t & HeadNoun == l)
+    # do regression model on target using structure SentenceTypeition
+    onemodel = lm(target ~ cobject, onetime)
+    # print(summary(tarmodel))
+    # this is the t-value for structure
+    targetT = coef(summary(onemodel))[2,3]  # observed t-value
+    targetP = abs(coef(summary(onemodel))[2,4])  # observed p-value
+    means.df$tstr[means.df$time == t & means.df$HeadNoun == l] = targetT
+    means.df$pstr[means.df$time == t & means.df$HeadNoun == l] = targetP
+  }
+}
+
+# to see these p-values, we draw them arbitrarily on the graph at 0.2.
+# when the p-value < 0.05, we draw a blue line above 0.2
+# when the p-value > 0.05, we draw an orange line below 0.2
+pliney = -0.1
+plinemax = 0.2
+means.df$pline = pliney+plinemax*(0.05-means.df$pstr)
+means.df$plinecol = ifelse(means.df$pstr < 0.05,"a","b")
+wsize = mean(pdata$time[2:5] - pdata$time[1:4] - 8)/2
+means.df$SentenceType=factor(means.df$SentenceType,levels=c("Subject","Object"))
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + scale_fill_brewer(palette="Set2")
+p = p + theme_bw()   # change background to white
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = pliney, ymax= pline, fill=plinecol),colour=NA,show.legend=FALSE)
+p
+```
+
+```{r}
+# Also, each window is not independent, so we create clusters for adjacent windows with p<0.05
+# cnum is the cluster number and we increment the number when the p value is > 0.05
+# so clusters with the same cnum are part of the same cluster
+cnum = 1
+lastpval = 100
+lasttdir = 1
+means.df$cnum = 1
+for (l in c("CL","ge3")){
+  for (t in timelist[2:length(timelist)]){
+    onetime = subset(means.df,time == t & HeadNoun == l & SentenceType == "Object")
+    pval = abs(onetime$pstr)
+    tdir = onetime$tstr
+    if (pval < 0.05 & lastpval > 0.05 ){
+      cnum = cnum + 1  # increase cluster number when entering a significant cluster from a non-significant cluster
+    }
+    if (pval > 0.05 ){  
+      cnum = cnum + 1 # increase cluster number when not significant
+    }else{
+      # if t value flips direction, even if both are signif, 
+      # we should treat those as separate clusters
+      if (lasttdir*tdir < 0){
+        cnum = cnum + 1 
+      }
+    }
+    lastpval = pval
+    lasttdir = tdir
+    means.df$cnum[means.df$time == t & means.df$HeadNoun == l] = cnum
+  }
+  cnum=cnum+1  # new cluster for different HeadNounuages
+}
+head(means.df,10)
+
+# this shows the clusters
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType, label=cnum))
+p = p + scale_colour_brewer(palette="Set1")
+p = p + scale_fill_brewer(palette="Set2")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Looks to passive match")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = pliney, ymax= pline, fill=plinecol),colour=NA,show.legend=FALSE)
+p + geom_text(size=2)
+```
+
+
+```{r}
+# we now want to identify the clusters that were significant
+# p-values are same for subject/object, so just use object.
+meansonlyact.df = subset(means.df, SentenceType == "Object")
+sigcluster = subset(meansonlyact.df, abs(pstr) < 0.05 )
+print(sigcluster,digits=3)
+# this computes the sum of the t-values for each cluster
+sumcluster  = aggregate(tstr ~ cnum + HeadNoun, meansonlyact.df, sum)
+head(sumcluster)
+
+# here are the start and finish times for significant clusters
+timedf = aggregate(time ~ cnum + HeadNoun,sigcluster,min)
+colnames(timedf)<-c("cnum","HeadNoun","starttime")
+timedf2 = aggregate(time ~ cnum + HeadNoun,sigcluster,max)
+timedf$endtime = timedf2$time+33
+print(timedf)
+paste(timedf$starttime,"-",timedf$endtime,"ms",sep="",collapse=",")
+```
+
+
+```{r}
+# now we create a distribution of t-values (save in permdist)
+# by randomly scrambling the subject/object labels for each time bin 1000 times
+createPermDist <- function(filename="permDist.RData"){
+  n = 1000
+  exptests = data.frame()
+  for (s in 1:length(sigcluster$time)){
+    #  print(cl)
+    cl = sigcluster$cnum[s] # cluster number
+    b = sigcluster$time[s] # time
+    l = sigcluster$HeadNoun[s] # HeadNounuage
+    print(paste("b ",b," HeadNoun",l))
+    # one time point
+    onetime = subset(pdata,HeadNoun == l & time %in% b)
+    # randSet is a copy of onetime dataframe that is scrambled
+    randSet = onetime
+    
+    for (i in 1:n){
+      #  set.seed(i)
+      # randomly scramble cobject labels without replacement
+      randSet$cobject = sample(randSet$cobject,length(randSet$cobject))
+      # test if target is related to random scrambled cobject
+      randmodel = lm(target ~ cobject ,randSet)
+      #  print(summary(randmodel))
+      # extract and save t-values
+      t = coef(summary(randmodel))[2,3]
+      df = data.frame(t=t,cluster=cl,time=b,HeadNoun=l,sim=i)
+      exptests = rbind(exptests, df )
+    }
+  }
+  save(exptests,file=filename)
+  return(exptests)
+}
+# Each time you run the permutation test, you get different results
+# to get the results in the paper, we use our previously saved permutation test
+#load("permDistCan8.RData")
+
+# If you want to run your own permutation test, you can uncomment this command and it will create the exptests data frame and save it in RData file.
+exptests = createPermDist("permDistCan8.RData") 
+
+# we sum over clusters so that longer clusters have stronger t-values
+sumt.df =  aggregate(t ~ HeadNoun + cluster + sim, exptests, sum)
+head(sumt.df)
+
+# simulated sum cluster histogram
+p = ggplot(sumt.df,aes(x = t))
+p = p +geom_histogram(binwidth=0.5)
+p = p + facet_wrap(~ HeadNoun)
+p+theme_bw()
+
+```
+
+
+```{r}
+# this code extracts out the maximum sum t for each simulation at each age
+maxclusterdist = data.frame()
+for (l in unique(sumt.df$HeadNoun)){
+  for (s in unique(sumt.df$sim)) {
+    # get all results for one simulation in one HeadNounuage
+    onesim = subset(sumt.df,sim == s & HeadNoun == l)
+    onesim$astruct = abs(onesim$t)
+    # find max t-value
+    maxrow = onesim[order(onesim$astruct,decreasing = T),]
+    maxclusterdist = rbind(maxclusterdist,maxrow[1,])
+  }
+}
+head(maxclusterdist)
+
+# Shows the simulated distribution with maximum cluster t values
+maxclusterdist2 = maxclusterdist[order(maxclusterdist$HeadNoun,maxclusterdist$t),]
+p = ggplot(maxclusterdist,aes(x = t))
+p = p +geom_histogram(binwidth=0.5)
+p = p + facet_wrap(~ HeadNoun)
+p+theme_bw()
+
+maxclusterdist$type = "Maximal sum t"
+sumt.df$astruct = abs(sumt.df$t)
+sumt.df$type = "All sum t"
+bothdist = rbind(sumt.df,maxclusterdist)
+bothdist$c= 1
+tvaldf = aggregate(c ~ type + HeadNoun, bothdist,sum)
+tvaldf$upper= as.integer(tvaldf$c*0.975)
+tvaldf$lower= as.integer(tvaldf$c*0.025)
+sortbothdist = bothdist[order(bothdist$type,bothdist$HeadNoun,bothdist$t),]
+tvaldf2 = tvaldf
+for (e in tvaldf$HeadNoun){
+  for (t in tvaldf$type){
+    d = sortbothdist[sortbothdist$HeadNoun == e & sortbothdist$type==t,]
+    u = tvaldf$upper[tvaldf$type == t & tvaldf$HeadNoun==e]
+     l = tvaldf$lower[tvaldf$type == t & tvaldf$HeadNoun==e]
+   tvaldf$bar[tvaldf$type == t & tvaldf$HeadNoun==e] = d$t[u]
+    tvaldf2$bar[tvaldf2$type == t & tvaldf2$HeadNoun==e] = d$t[l]
+ }
+}
+bothtvaldf = rbind(tvaldf2,tvaldf)
+
+p = ggplot(bothdist,aes(x = t))
+p = p +geom_histogram(binwidth=0.5)
+#p = p +geom_vline(end,mapping=aes(xintercept=xint))
+p = p + facet_wrap(~ type + HeadNoun, ncol=2)
+p=p+theme_bw()+geom_vline(data=bothtvaldf,aes(xintercept=bar),linetype="dashed",size=1)
+apaformat(p)+ylab("Number of t values")+xlab("t-values")
+ggsave("dist.png",width=6,height=4)
+```
+
+
+```{r}
+# here we test all significant clusters against corresponding distribution
+clmaxclusterdist = subset(maxclusterdist,HeadNoun == "CL")
+gemaxclusterdist = subset(maxclusterdist,HeadNoun == "ge3")
+# this identifies cluster tvalues that are greater than dist t-values
+for (cl in unique(sumcluster$cnum)){
+  bins = unique(means.df[means.df$cnum == cl,]$time)
+  lan = sumcluster$HeadNoun[sumcluster$cnum == cl][1]
+  
+  tstr = abs(sumcluster$tstr[sumcluster$cnum==cl])
+  # use appropriate distribution
+   if (lan == "CL"){
+     permtdist = clmaxclusterdist$astruct
+   }else{
+     permtdist = gemaxclusterdist$astruct
+   }
+
+  # permtdist is the dist t-values, 
+  # so p value is proportion of values greater than observed t-value.
+  pstr = sum(abs(permtdist) > tstr, na.rm = TRUE)/length(permtdist)
+  if (pstr < 0.025){
+  print(paste("Cluster",cl,"Obs.sum t",round(tstr,3),"PropDist > observed p-value",pstr))
+  }
+  means.df$permtestp[means.df$time %in% bins & means.df$HeadNoun == lan] = pstr
+}
+
+# now we update our plot
+p = ggplot(means.df , aes( x = time, y = target, linetype=SentenceType))
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+# this pulls out the clusters which are significant by the permutation test
+meansigStr = subset(means.df,permtestp < 0.025) 
+# color them grey
+if (length(meansigStr$time) > 0){
+  p = p + geom_rect(data=meansigStr,aes(xmin=time-wsize-4, xmax=time+wsize+4, ymin = pliney+0.1, ymax= 1.0),colour=NA,fill="grey90",show.legend=FALSE)
+}
+# same as before
+p = p + geom_line()
+p = p + scale_linetype_discrete(name="RC Type")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Target Proportion")
+p = p + xlab("Time (msecs)")
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = pliney, ymax= pline, colour=plinecol,fill=plinecol),show.legend=FALSE)
+p = p + geom_curve(data=meansigPost,aes(x=time+10, xend=time+winsize-10, y = 0.9, yend= 0.9),color="black",size=1, lineend = "square", curvature = -0.5, show.legend=FALSE)
+p = p + geom_rect(data=onsetStim,aes(xmin=time,xmax = time2-33, ymin=ypos-0.13, ymax=ypos,linetype=SentenceType),fill=NA,colour="black", show.legend=FALSE)
+p = p + geom_text(data=onsetStim,aes(x=(time+time2)/2, y=ypos-0.05, label=cat), hjust=0.7, size=3,show.legend=FALSE)
+p = p +scale_colour_grey()
+p = p +scale_fill_grey()
+apaformat(p)
+ggsave("permCan.png",width=6,height=6)
+```
+
+The paper includes some figures to explain the permutation analysis.  Here is the figure that shows three permutations of the original data.
+
+```{r,eval=TRUE,echo=FALSE,fig.height=3}
+generateExampleExp <- function(){
+  t2 = means.df$time[which(means.df$pstr == min(means.df$pstr,na.rm=TRUE))[1]]
+#  print(t2)
+  onetime = subset(pdata,HeadNoun == "ge3" & time == t2)
+  randSet = onetime
+  randmodel = lm(target ~ cobject ,randSet)
+  #print(summary(randmodel))
+  meantar = aggregate(target ~ cobject,onetime, mean)
+  meantar = cbind(meantar,predict(randmodel, meantar, interval="confidence") )
+  meantar$diff = meantar$fit[1]-meantar$fit[2]
+  head(as.character(randSet$SentenceType),14)
+  meantar$sim = "Observed"
+  randSet$cobject = sample(randSet$cobject,length(randSet$cobject))
+  randmodel = lm(target ~ cobject ,randSet)
+  #print(summary(randmodel))
+  meantar2 = aggregate(target ~ cobject,onetime, mean)
+  meantar2 = cbind(meantar2,predict(randmodel, meantar2, interval="confidence") )
+  meantar2$diff = meantar2$fit[1]-meantar2$fit[2]
+  head(as.character(randSet$SentenceType),14)
+  meantar2$sim = "Exp. 1"
+  alldata = rbind(meantar,meantar2)
+  randSet$cobject = sample(randSet$cobject,length(randSet$cobject))
+  randmodel = lm(target ~ cobject ,randSet)
+  #print(summary(randmodel))
+  meantar3 = aggregate(target ~ cobject,onetime, mean)
+  meantar3 = cbind(meantar3,predict(randmodel, meantar3, interval="confidence") )
+  meantar3$diff = meantar3$fit[1]-meantar3$fit[2]
+  head(as.character(randSet$SentenceType),14)
+  meantar3$sim = "Exp. 2"
+  alldata = rbind(alldata,meantar3)
+  randSet$cobject = sample(randSet$cobject,length(randSet$cobject))
+  randmodel = lm(target ~ cobject ,randSet)
+  #print(summary(randmodel))
+  meantar4 = aggregate(target ~ cobject,onetime, mean)
+  meantar4 = cbind(meantar4,predict(randmodel, meantar4, interval="confidence") )
+  meantar4$diff = meantar4$fit[1]-meantar4$fit[2]
+  head(as.character(randSet$SentenceType),14)
+  meantar4$sim = "Exp. 3"
+  alldata = rbind(alldata,meantar4)
+  return(alldata)
+}
+
+findData <- function(){
+  notfound = 0
+  while(notfound < 3){
+    alldata <- generateExampleExp()
+    notfound = 0
+    if (alldata$diff[alldata$cobject==0.5 & alldata$sim == "Exp. 1"] < -0.2){
+      notfound = notfound + 1
+    }
+    if (alldata$diff[alldata$cobject==0.5 & alldata$sim == "Exp. 2"] < 0.1){
+      notfound = notfound + 1
+    }
+    if (alldata$diff[alldata$cobject==0.5 & alldata$sim == "Exp. 3"] > 0.2){
+      notfound = notfound + 1
+    }
+  }
+  alldata$cobject=factor(alldata$cobject,labels=c("Object","Subject"))
+  return(alldata)
+}
+#alldata <- findData()
+#write.csv(alldata,"exampleExp.csv")
+alldata <- read.csv("exampleExp.csv")
+alldata$cobject=factor(alldata$cobject,labels=c("Subject","Object"))
+alldata$sim = factor(alldata$sim,levels=c("Observed","Exp. 1","Exp. 2","Exp. 3"))
+p = ggplot(alldata,aes(x=cobject, y = target,ymin=lwr,ymax=upr))+geom_errorbar(width=0.25)+facet_wrap(~ sim, nrow=1)+ylab("Target proportion")+xlab("RC Type")
+apaformat(p)
+ggsave("ci.png",width=6,height=3)
+```
+
+Here is the accuracy data analysis
+
+```{r,fig.height=3}
+accdf = read.csv("accuracy data-19 for CL & 18 for GE - all correct trials.csv")
+accdf$structure = factor(accdf$structure,labels=c("CL","ge3"))
+accdf$extraction = factor(accdf$extraction ,labels=c("Subject","Object"),levels=c("subject","object"))
+
+accdf$cCL = ifelse(accdf$structure == "CL",0.5,-0.5)
+accdf$cobject = ifelse(accdf$extraction == "Object",0.5,-0.5)
+accdf$participant=factor(accdf$participant)
+accdf$item=factor(accdf$item)
+xtabs( ~ structure + participant,accdf)
+xtabs( ~ extraction + participant,accdf)
+xtabs( ~ structure + item,accdf)
+xtabs( ~ extraction + item,accdf)
+
+acc.glm = glmer(Correct ~ cobject*cCL + (1 | participant) + (1  | item),accdf,family="binomial")
+print(summary(acc.glm))
+
+accdf$pred = remef(acc.glm, ran = "all")
+head(accdf)
+meandf = aggregate(Correct ~ extraction + structure, accdf, mean)
+print(meandf)
+# compute sd from pred without random effects
+meandf$sd = aggregate(pred ~ extraction + structure, accdf,sd)$pred
+print(meandf)
+# se is computed from sd divided by number of participants
+meandf$se = meandf$sd/sqrt( nlevels(accdf$participant) )
+meandf$upper = meandf$Correct + meandf$se
+meandf$lower = meandf$Correct - meandf$se
+print(meandf)
+
+p = ggplot(meandf, aes(x=structure,y=Correct, fill=extraction,ymin = lower, ymax=upper))
+p = p +geom_bar(stat="identity",position="dodge")
+p = p +scale_fill_grey(name="RC Type")
+p = p + xlab("Sentence Type")
+p = p + geom_errorbar(width=0.25, position=position_dodge(.9) )
+apaformat(p)
+ggsave("accuracy.png",width=5,height=3)
+
+```

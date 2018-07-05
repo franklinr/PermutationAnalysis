@@ -1,5 +1,5 @@
 # PermutationAnalysis
-This is a repository for permutation analyses
+This is a repository for permutation analyses.  The cantonese paper has been written as a tutorial on Permutation analysis, so it is probably the best place to start.
 
 English Active/Passive Eye-tracking in Children
 

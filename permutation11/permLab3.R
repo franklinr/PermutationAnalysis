@@ -1,4 +1,4 @@
-## permutation script 2015
+## permutation script 
 require(ggplot2)
 require(lme4)
 
@@ -72,9 +72,11 @@ for (l in c("English","Japanese")){
 # to see these p-values, we draw them arbitrarily on the graph at 0.2.
 # when the p-value < 0.05, we draw a blue line above 0.2
 # when the p-value > 0.05, we draw an orange line below 0.2
+maxtarget = max(means.df$target)
+mintarget = min(means.df$target)
 wsize = 40
-pliney = 0.2
-plinemax = 0.1
+pliney = mintarget*0.7  # put below minimum value
+plinemax = 0.1     # how long are the p-value bars
 means.df$pline = pliney+plinemax*(0.05-means.df$pstr)
 means.df$plinecol = ifelse(means.df$pstr < 0.05,"a","b")
 
@@ -144,7 +146,7 @@ print(sumcluster)
 
 # now we create a distribution of t-values (save in permdist)
 # by randomly scrambling the active and passive labels for each time window 1000 times
-n = 100
+numSimulations = 100
 exptestvalue = data.frame()
 for (s in 1:length(sigcluster$time)){
   #  print(cl)
@@ -157,7 +159,7 @@ for (s in 1:length(sigcluster$time)){
   # randSet is a copy of onetime that is scrambled
   randSet = onetime
   
-  for (i in 1:n){
+  for (i in 1:numSimulations){
     #  set.seed(i)
     # randomly scramble cpassive labels without replacement
     randSet$cpassive = sample(randSet$cpassive,length(randSet$cpassive))
@@ -204,14 +206,14 @@ p = p + facet_wrap(~ lang)
 p+theme_bw()
 
 # maxclusterdist is sorted by language, 
-# so first 1000 are English and second 1000 are Japanese
-emaxclusterdist = maxclusterdist$t[1:1000]
-jmaxclusterdist = maxclusterdist$t[1001:2000]
+# so first set are English and second set are Japanese
+emaxclusterdist = maxclusterdist$t[1:numSimulations]
+jmaxclusterdist = maxclusterdist$t[(numSimulations+1):(numSimulations+numSimulations)]
 
 # this identifies tvalues that are greater than dist t-values
 for (cl in unique(sumcluster$cnum)){
   bins = unique(means.df[means.df$cnum == cl,]$time)
-  lan = sumcluster$lang[sumcluster$cnum == cl][1]
+  lan = sumcluster$lang[sumcluster$cnum == cl]
   
   tstr = abs(sumcluster$tstr[sumcluster$cnum==cl])
   # permutation t distribution depends on language
@@ -235,7 +237,7 @@ p = ggplot(means.df , aes( x = time, y = target, colour=cond))
 meansigStr = subset(means.df,permtestp < 0.025) 
 # color them grey
 if (length(meansigStr$time) > 0){
-  p = p + geom_rect(data=meansigStr,aes(xmin=time-50, xmax=time+50, ymin = pliney+0.1, ymax= 1.0),,colour=NA,fill="grey90",show.legend=FALSE)
+  p = p + geom_rect(data=meansigStr,aes(xmin=time-50, xmax=time+50, ymin = mintarget, ymax= maxtarget),colour=NA,fill="grey90",show.legend=FALSE)
 }
 # same as before
 p = p + geom_line()
@@ -251,4 +253,4 @@ p = p + geom_vline(xintercept = 1500,colour="black", linetype = 2)
 p = p + geom_vline(xintercept = 2000,colour="black", linetype = 2) 
 p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = pliney, ymax= pline, colour=NA,fill=plinecol),show.legend=FALSE)
 p
-ggsave("perm.png")
+#ggsave("perm.png")

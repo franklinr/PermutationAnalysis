@@ -1,0 +1,708 @@
+---
+title: "Mandarin"
+output: word_document
+---
+
+- This has a set of analyses on Mandarin RCs for this paper. 
+Yang, W., Chan, A., Chang, F., & Kidd, E. Four-year-old Mandarin-speaking children’s online comprehension of relative clauses. 
+
+- First we load in the looking data and plot looks to target in proportions for the whole test period.
+
+```{r}
+## permutation script 2019
+require(ggplot2)
+require(lme4)
+require(stringr)
+require(nlme)         ## for lme()
+require(emmeans)      ## for lsmeans()
+# may need to run this command if the following doesn work install.packages("multcomp")
+require(multcomp)  ## for multiple comparison stuff
+require(remef)
+#Set your working directory
+#  Go to Session in menu, go to Set Working Directory, 
+#  click on To Source File Location
+print(sessionInfo())
+
+apaformat <- function(p){
+     p = p + theme_bw() # make the theme black-and-white rather than grey (do this before font changes, or it overrides them)
+     p = p + theme(
+#          plot.title = theme_text(face="bold", size=14), # use theme_get() to see available options
+#          axis.title.x = theme_text(face="bold", size=12),
+#          axis.title.y = theme_text(face="bold", size=12, angle=90),
+          panel.grid.major = element_blank(), # switch off major gridlines
+          panel.grid.minor = element_blank(), # switch off minor gridlines
+#          legend.position = c(0.2,0.8), # manually position the legend (numbers being from 0,0 at bottom left of whole plot to 1,1 at top right)
+#          legend.title = theme_blank(), # switch off the legend title
+#          legend.text = theme_text(size=12),
+#          legend.key.size = unit(1.5, "lines"),
+          legend.key = element_blank() # switch off the rectangle around symbols in the legend
+     )
+     return(p)
+}
+
+
+modelComparisonPrint<-function(mlist){
+  for (i in 2:length(mlist)){
+    am1=anova(mlist[[i-1]],mlist[[i]])
+    terms = attr(terms(mlist[[i-1]]),"term.labels")
+    print(am1)
+    sig = ifelse(am1$`Pr(>Chisq)`[2]<0.05," *** ","")
+    print(paste("########## Above comparison for ",terms[length(terms)],sig))
+  }
+}
+
+modelComparison <- function(model,modellist=list(),verbose=0){
+  #  print(model)
+  terms = attr(terms(model),"term.labels")
+  modellist = append(modellist,model)
+  #  print(terms)
+  if (length(terms) > 0){
+    newformula = paste(". ~ . - ",terms[length(terms)],"")
+    print(paste("remove",newformula))
+    model2 = update(model, as.formula(newformula))
+    if (verbose > 0){
+      print(summary(model2))
+    }
+    am1=anova(model2, model)
+    print(am1)
+    sig = ifelse(am1$`Pr(>Chisq)`[2]<0.05," *** ","")
+    print(paste("########## Above comparison for ",terms[length(terms)],sig))
+    
+    terms = attr(terms(model),"term.labels")
+    modellist = modelComparison(model2,modellist)
+  }
+  
+  return(modellist)
+}
+
+
+getModelNumHighestTerm <- function(varname,modellist) {
+  for (i in 1:length(modellist)) {
+    terms = attr(terms(modellist[[i]]), "term.labels")
+    
+    if (length(terms) > 0 & terms[length(terms)] == varname) {
+      return(i)
+    }
+  }
+  return(-1)
+}
+
+#cat(paste(printMixedModelResults(modellist),collapse="\n"))
+
+roundNonZero <- function(val){
+  tval = val
+  pow = 1;
+  repeat {
+    if (abs(tval) > 1){
+      return(round(val,pow))
+    }
+    tval = tval * 10
+    if (pow == 5){
+      return(round(val,pow))
+    }
+#    print(tval)
+#    print(pow)
+    pow = pow + 1
+  }
+  return(val)
+}
+
+report <- function(varname, mlist){
+  omnimodel = mlist[[1]]
+  model.sum = summary(omnimodel)
+  model.coef = coefficients(model.sum)
+  modelnames= rev(rownames(model.coef))
+  modelnum = which(modelnames==varname)
+  m.anova = anova(mlist[[modelnum]],mlist[[modelnum+1]])
+  chisq = round(m.anova$Chisq[2],2)
+#  pval = roundNonZero(m.anova$`Pr(>Chisq)`[2])
+  pval = format.pval(pv = m.anova$`Pr(>Chisq)`[2], digits = 2,eps=0.001,nsmall = 3)
+  
+  oneline = model.coef[varname,]
+  beta = roundNonZero(oneline[1])
+  se = round(oneline[2],2)
+  
+  outstr = paste("$\\beta$=",beta,", SE=",se,", $\\chi^2$(1)=",chisq,", p=",pval,sep="")
+  outstr = gsub("=<","<",outstr)
+  return(outstr)
+}
+
+logit2prob <- function(logit){
+  odds <- exp(logit)
+  prob <- odds / (1 + odds)
+  return(prob)
+}
+
+printPostHoc<-function(post){
+  beta = roundNonZero(post$test$coefficients)
+  z= roundNonZero(post$test$tstat)
+  pval = post$test$pvalues
+    pval = format.pval(pv = post$test$pvalues, digits = 2,eps=0.001,nsmall = 3)
+
+   outstr = paste("$\\beta$=",beta,", z=",z,", p=",pval,sep="")
+    outstr = gsub("=<","<",outstr)
+  return(outstr)
+}
+
+printPostHocEM<-function(posthocs,dim,val){
+  r = which(posthocs[[dim]]==val)
+  z= roundNonZero(posthocs$z.ratio[r])
+  pval = posthocs$p.value[r]
+  pval = format.pval(pv = pval, digits = 2,eps=0.001,nsmall = 3)
+
+   outstr = paste("z=",z,", p=",pval,sep="")
+  outstr = gsub("=<","<",outstr)
+  return(outstr)
+}
+
+# data frame with onset for each region
+onsetStimCL = data.frame(SentenceType=c(rep("Subject",4),rep("Object",5)),cat = c("VN","DE","DCL","Head","N","V","DE","DCL","Head"), onset=c(0,0.808,1.02,1.49,0,0.431,0.767,1.027,1.427))
+onsetStimCL$HeadNoun = "DCL"
+onsetStimDE = data.frame(SentenceType=c(rep("Subject",3),rep("Object",4)),cat = c("VN","DE","Head","N","V","DE","Head"), onset=c(0,0.797,0.972,0,0.493,0.821,0.963))
+onsetStimDE$HeadNoun = "DE"
+onsetStim = rbind(onsetStimCL,onsetStimDE)
+onsetStim$time = onsetStim$onset * 1000
+#onsetStim$time2=c(onsetStim$time[2:length(onsetStim$time)],0)
+#onsetStim$time2[onsetStim$cat=="Head"] = 1000*c(2.001,1.876,1.479,1.501)
+onsetStim$time2 = c(805,1017,1487,2001, #subject DCL offsets
+                    428,764,1024,1424,1876, # object DCL
+                    794,969,1479, # subject DE
+                    490, 818,960,1501) # object DE
+onsetStim$ypos = 0.95
+onsetStim$ypos[onsetStim$SentenceType == "Object"] = 0.75
+onsetStim$target = 1
+onsetStim$restarg = 0
+onsetStim[onsetStim$cat=="Head",]
+
+
+aggregate(time2 ~ HeadNoun + cat, onsetStim, mean)
+
+bothdataAll=read.csv("ManRC eyetracking data-4yrs-final.csv")
+bothdata=bothdataAll
+xtabs(~ Participant,bothdata)
+bothdata$HeadNoun <- factor(bothdata$HeadNoun,labels=c("DCL","DE"))
+bothdata$SentenceType=factor(bothdata$SentenceType,labels=c("Subject","Object"))
+
+bothdata$Item = str_replace(bothdata$Item,"(S|O)","I")
+bothdata$time = as.numeric(as.character(bothdata$time))
+bothdata$time = bothdata$time * 1000
+bothdata$target = bothdata$T
+#/(both$T+both$D)
+xtabs(~ Participant + HeadNoun , bothdata)
+xtabs(~ Participant + SentenceType , bothdata)
+xtabs(~ Item + HeadNoun , bothdata)
+xtabs(~ Item + SentenceType, bothdata)
+
+
+means.df = aggregate(cbind(target) ~ time + HeadNoun + SentenceType, bothdata, mean)
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Target Proportions")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(data=onsetStim,aes(xmin=time,xmax = time2-33, ymin=ypos-0.13, ymax=ypos,colour=SentenceType),fill=NA, show.legend=FALSE)
+p = p + geom_text(data=onsetStim,aes(x=(time+time2)/2, y=ypos-0.05, label=cat),hjust=0.7,size=3,show.legend=FALSE)
+p
+```
+
+Above is the raw data, but next we will do a mixed model analysis using the empirical logit.  We zero the empirical logit at time 0 to remove any earlier preferences.  Since children could be doing prediction or have biases for particular structures before the sentence disambiguate, we do an analysis on all of the data.
+
+```{r}
+winsize = 200
+
+bothdata$win = floor(bothdata$time/winsize) # like floor
+xtabs(~ win, bothdata)
+#xtabs(~ Item  + SentenceType+ win, both)
+#xtabs(~ Participant + SentenceType, both)
+bothdata$frames = 1
+
+bothdata$frames = 1
+subjsum.df = aggregate(cbind(target,frames) ~ win + HeadNoun + SentenceType + Participant + Item, bothdata, sum)
+subjsum.df$elog <- log( (subjsum.df$target + .5) / (subjsum.df$frames - subjsum.df$target + .5) )
+subjsum.df$time=subjsum.df$win*winsize
+xtabs(~ time,subjsum.df)
+
+# remove preference at time 0
+meansubset = subset(subjsum.df,time == 0)
+meanpartitemdf = aggregate(elog ~  Participant + Item + HeadNoun + SentenceType, meansubset, mean)
+both3 = merge(subjsum.df,meanpartitemdf, all.x=TRUE,by=c("Participant","Item","HeadNoun","SentenceType"),sort=F)
+both3$elog = both3$elog.x-both3$elog.y
+
+# plot figure for dataset
+means.df = aggregate(cbind(elog) ~ time + HeadNoun + SentenceType, both3, mean)
+p = ggplot(means.df , aes( x = time, y = elog, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Empirical Logit")
+p = p + xlab("Time")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p+geom_vline(xintercept = 200*0:12)
+ggsave("elogitall.png")
+```
+
+Here is a mixed model analysis using 200 ms windows
+
+```{r}
+subjmeans.df = both3
+subjmeans.df$cwin = subjmeans.df$win - mean(subjmeans.df$win)
+subjmeans.df$cCL = ifelse(subjmeans.df$HeadNoun == "DCL",0.5,-0.5)
+subjmeans.df$cobject = ifelse(subjmeans.df$SentenceType == "Object",0.5,-0.5)
+subjmeans.df$Participant=factor(subjmeans.df$Participant)
+subjmeans.df$Item=factor(subjmeans.df$Item)
+
+mixmodel = lmer(elog ~ cwin*cCL*cobject + (1  | Participant) + (1   | Item), subjmeans.df)
+summixed=summary(mixmodel)
+print(summixed)
+print(unique(subjmeans.df$win))
+
+modellist = modelComparison(mixmodel)
+
+```
+
+There was a main effect of window, `r report("cwin",modellist)`,
+and an interaction of Headnoun and sentence type `r report("cCL:cobject",modellist)`.
+Since we have marginal three way interaction of HeadNoun, SentenceType, and window `r report("cwin:cCL:cobject",modellist)`, we can do posthocs.
+We use emmeans to do contrasts between obj and sub for each window in each HeadNoun.
+emmeans also adjusts p automatically for the number of comparisons.
+
+```{r}
+options(contrasts = c("contr.treatment", "contr.poly"))
+# may need to run this command if the following doesn work install.packages("nlme")
+subjmeans.df$win = factor(subjmeans.df$win)
+subjmeans.df$HeadNoun = factor(subjmeans.df$HeadNoun)
+subjmeans.df$SentenceType = factor(subjmeans.df$SentenceType)
+mixmodelFactor = lmer(target ~ win*HeadNoun*SentenceType + (1 | Participant) + (1 | Item), subjmeans.df)
+#print(summary(mixmodelFactor))
+#save(mixmodelFactor,"mixmodelSentSlopeFactor.RData")
+model.lsmobj <- emmeans(mixmodelFactor, ~  SentenceType | HeadNoun* win)
+posthocs = summary(as.glht(pairs(model.lsmobj)))
+print(posthocs)
+# only one window is significant $`HeadNoun = DE, win = 11`
+
+subjmeans.df$pred <- remef(mixmodelFactor, ran = "all")
+means2.df = aggregate(cbind(pred,target) ~ time + HeadNoun + SentenceType, subjmeans.df, mean)
+timelist = as.integer(unique(subjmeans.df$time))
+p = ggplot(means2.df , aes( x = time, y = target, colour=SentenceType))
+meanwin= data.frame(time= rep(timelist,2),HeadNoun=rep(c("DCL","DE"),each=length(timelist)))
+#meanwin$time = (meanwin$win-1)*winsize
+meanwin$pval = as.numeric(lapply(posthocs, function(x){ return( x$test$pvalues[1]) }) )
+meanwin$target = 0
+meanwin$pred =0
+meanwin$SentenceType = "Object"
+meansigPost = subset(meanwin,pval < 0.05) 
+# color them grey
+
+```
+
+The mixed model above yields one window that shows a significant difference (highlighted in red). 
+
+Now we do the same empirical logit mixed model analysis using DE offset as the start time. This analysis assumes that children have no structural biases or predictions before DE offset.
+
+```{r}
+offsetDE = read.csv("DEoffset.csv")
+both2 = merge(bothdata,offsetDE, all.x=TRUE,by=c("Item","SentenceType"),sort=F)
+both2$time = both2$time - both2$Offset*1000
+#xtabs(~ time, both2)
+
+winsize = 200
+
+both2$win = floor(both2$time/winsize) # like floor
+xtabs(~ win, both2)
+#xtabs(~ Item  + SentenceType+ win, both)
+#xtabs(~ Participant + SentenceType, both)
+both2$frames = 1
+
+subjsum.df = aggregate(cbind(target,frames) ~ win + HeadNoun + SentenceType + Participant + Item, both2, sum)
+subjsum.df$elog <- log( (subjsum.df$target + .5) / (subjsum.df$frames - subjsum.df$target + .5) )
+subjsum.df = subjsum.df[subjsum.df$win>=0 & subjsum.df$win<7,]
+subjsum.df$time=subjsum.df$win*winsize
+xtabs(~ time,subjsum.df)
+
+# zero looking at DE offset which is time 0
+meansubset = subset(subjsum.df,time == 0)
+meanpartitemdf = aggregate(elog ~  Participant + Item + HeadNoun + SentenceType, meansubset, mean)
+both3 = merge(subjsum.df,meanpartitemdf, all.x=TRUE,by=c("Participant","Item","HeadNoun","SentenceType"),sort=F)
+both3$elog = both3$elog.x-both3$elog.y
+
+# plot figure for dataset
+means.df = aggregate(cbind(elog) ~ time + HeadNoun + SentenceType, both3, mean)
+p = ggplot(means.df , aes( x = time, y = elog, colour=SentenceType))
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Empirical Logit")
+p = p + xlab("Time relative to DE offset")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p+geom_vline(xintercept = 200*0:6)
+ggsave("elogit.png")
+
+```
+
+Here is a mixed model analysis using 200 ms windows
+
+```{r}
+subjmeans.df = both3
+subjmeans.df$cwin = subjmeans.df$win - mean(subjmeans.df$win)
+subjmeans.df$cCL = ifelse(subjmeans.df$HeadNoun == "DCL",0.5,-0.5)
+subjmeans.df$cobject = ifelse(subjmeans.df$SentenceType == "Object",0.5,-0.5)
+subjmeans.df$Participant=factor(subjmeans.df$Participant)
+subjmeans.df$Item=factor(subjmeans.df$Item)
+
+mixmodel = lmer(elog ~ cwin*cCL*cobject + (1 +cobject | Participant) + (1  | Item), subjmeans.df)
+summixed=summary(mixmodel)
+print(summixed)
+print(unique(subjmeans.df$win))
+
+modellist = modelComparison(mixmodel)
+
+```
+
+There was a main effect of window, `r report("cwin",modellist)`,
+
+Since there is no three way interaction, we do not report posthocs.  
+
+Next we do a permutation analysis.
+
+```{r}
+meansubset = subset(bothdata,time == 0)
+meanpartitemdf = aggregate(target ~  Participant + Item + HeadNoun + SentenceType, meansubset, mean)
+both = merge(bothdata,meanpartitemdf, all.x=TRUE,by=c("Participant","Item","HeadNoun","SentenceType"),sort=F)
+both$target = both$target.x-both$target.y
+
+# create copy of data frame
+pdata = both[!is.na(both$time),]
+wdivsize = 1
+pdata$cobject = ifelse(pdata$SentenceType == "Subject",0.5,-0.5)
+pdata$cDErc = ifelse(pdata$HeadNoun == "DE",0.5,-0.5)
+pdata$win = as.integer(pdata$time/wdivsize)
+#xtabs(~ win, pdata)
+pdata$time = pdata$win*wdivsize
+
+#pdata$target = pdata$restarg
+# create data frame which averages over subjects.  
+# This also stores the results of the permutation analysis
+means.df = aggregate(target ~ SentenceType + cobject + time + HeadNoun, pdata, mean)
+means.df$pstr = 1000
+
+# We do this for each 100 ms window in the data
+timelist = unique(pdata$time)
+for (t in timelist){
+    # create data frame for ONE timebin for each HeadNounuage
+    onetime = subset(pdata,time == t)
+    
+    # do regression model on target using structure SentenceTypeition
+    onemodel = summary(lm(target ~ cobject*cDErc, onetime))
+    # print(summary(onemodel))
+    coefonemodel = coef(onemodel)
+    # this is the t-value for structure
+    objT = coefonemodel[2,3]  # observed t-value
+    objP = abs(coefonemodel[2,4])  # observed p-value
+    means.df$objT[means.df$time == t] = objT
+    means.df$objP[means.df$time == t] = objP
+    deT = coefonemodel[3,3]  # observed t-value
+    deP = abs(coefonemodel[3,4])  # observed p-value
+    means.df$deT[means.df$time == t] = deT
+    means.df$deP[means.df$time == t] = deP
+    intT = coefonemodel[4,3]  # observed t-value
+    intP = abs(coefonemodel[4,4])  # observed p-value
+    means.df$intT[means.df$time == t] = intT
+    means.df$intP[means.df$time == t] = intP
+    
+      randDCL = subset(onetime, HeadNoun=="DCL")
+      onemodelDCL = summary(lm(target ~ cobject, randDCL))
+      coefonemodelDCL = coef(onemodelDCL)
+      dclstrT = coefonemodelDCL[2,3]  # observed t-value
+      randDE = subset(onetime, HeadNoun=="DE")
+      onemodelDE = summary(lm(target ~ cobject, randDE))
+      coefonemodelDE = coef(onemodelDE)
+      destrT = coefonemodelDE[2,3]  # observed t-value
+    means.df$dclstrT[means.df$time == t] = dclstrT
+    means.df$destrT[means.df$time == t] = destrT
+}
+# to see these p-values, we draw them arbitrarily on the graph at 0.2.
+# when the p-value < 0.05, we draw a blue line above 0.2
+# when the p-value > 0.05, we draw an orange line below 0.2
+pliney = -0.1
+plinemax = 0.2
+means.df$plineobjP = pliney+plinemax*(0.05-means.df$objP)
+means.df$plinecolobjP = ifelse(means.df$objP < 0.05,"a","b")
+plineydeP = -0.3
+means.df$plinedeP = plineydeP+plinemax*(0.05-means.df$deP)
+means.df$plinecoldeP = ifelse(means.df$deP < 0.05,"a","b")
+plineyInt = -0.5
+means.df$plineintP = plineyInt+plinemax*(0.05-means.df$intP)
+means.df$plinecolintP = ifelse(means.df$intP < 0.05,"a","b")
+
+
+wsize = mean(pdata$time[2:5] - pdata$time[1:4] - 8)/2
+means.df$SentenceType=factor(means.df$SentenceType,levels=c("Subject","Object"))
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType))
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_line()
+p = p + scale_colour_brewer(palette="Set1")
+p = p + scale_fill_brewer(palette="Set2")
+p = p + theme_bw()   # change background to white
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = pliney, ymax= plineobjP, fill=plinecolobjP),colour=NA,show.legend=FALSE)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = plineydeP, ymax= plinedeP, fill=plinecoldeP),colour=NA,show.legend=FALSE)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = plineyInt, ymax= plineintP, fill=plinecolintP),colour=NA,show.legend=FALSE)
+p
+```
+
+```{r}
+# Also, each window is not independent, so we create clusters for adjacent windows with p<0.05
+# cnum is the cluster number and we increment the number when the p value is > 0.05
+# so clusters with the same cnum are part of the same cluster
+cnum = 1
+lastpval = 100
+lasttdir = 1
+means.df$cnum = 1
+for (t in timelist[2:length(timelist)]){
+    onetime = subset(means.df,time == t & HeadNoun == "DCL" & SentenceType == "Object")
+    pval = abs(onetime$intP)
+    tdir = onetime$intT
+    if (pval < 0.05 & lastpval > 0.05 ){
+      cnum = cnum + 1  # increase cluster number when entering a significant cluster from a non-significant cluster
+    }
+    if (pval > 0.05 ){  
+      cnum = cnum + 1 # increase cluster number when not significant
+    }else{
+      # if t value flips direction, even if both are signif, 
+      # we should treat those as separate clusters
+      if (lasttdir*tdir < 0){
+        cnum = cnum + 1 
+      }
+    }
+    lastpval = pval
+    lasttdir = tdir
+    means.df$cnum[means.df$time == t] = cnum
+}
+head(means.df,10)
+
+plineyInt=-0.1
+means.df$plineintP = plineyInt+plinemax*(0.05-means.df$intP)
+# this shows the clusters
+p = ggplot(means.df , aes( x = time, y = target, colour=SentenceType, label=cnum))
+p = p + scale_colour_brewer(palette="Set1")
+p = p + scale_fill_brewer(palette="Set2")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Looks to passive match")
+#p = p + ylim(0,1)
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = plineyInt, ymax= plineintP, fill=plinecolintP),colour=NA,show.legend=FALSE)
+p + geom_text(size=2)
+```
+
+
+```{r}
+# we now want to identify the clusters that were significant
+# p-values are same for active and passive, so we just used the active items.
+meansonlyact.df = subset(means.df, HeadNoun == "DCL" & SentenceType == "Object")
+sigcluster = subset(meansonlyact.df, abs(intP) < 0.05 )
+print(sigcluster,digits=3)
+# this computes the sum of the t-values for each cluster
+sumcluster  = aggregate(cbind(intT,dclstrT,destrT) ~ cnum + HeadNoun, meansonlyact.df, sum)
+head(sumcluster)
+
+# here are the start and finish bits
+timedf = aggregate(time ~ cnum + HeadNoun,sigcluster,min)
+colnames(timedf)<-c("cnum","HeadNoun","starttime")
+timedf2 = aggregate(time ~ cnum + HeadNoun,sigcluster,max)
+timedf$endtime = timedf2$time+33
+print(timedf)
+paste(timedf$starttime,"-",timedf$endtime,"ms",sep="",collapse=",")
+```
+
+
+```{r}
+# now we create a distribution of t-values (save in permdist)
+# by randomly scrambling the active and passive labels for each time window 1000 times
+createPermDist <- function(filename="permDist.RData"){
+  n = 1000
+  exptests = data.frame()
+  for (s in 1:length(sigcluster$time)){
+    #  print(cl)
+    cl = sigcluster$cnum[s] # cluster number
+    b = sigcluster$time[s] # time
+    print(paste("b ",b))
+    # one time point
+    onetime = subset(pdata, time %in% b)
+    # randSet is a copy of onetime that is scrambled
+    randSet = onetime
+    
+    for (i in 1:n){
+      #  set.seed(i)
+      # randomly scramble cobject labels without replacement
+      randSet$cobject = sample(randSet$cobject,length(randSet$cobject))
+      randSet$cDErc = sample(randSet$cDErc,length(randSet$cDErc))
+      # test if target is related to random scrambled cobject
+      onemodel = summary(lm(target ~ cobject*cDErc, randSet))
+      coefonemodel = coef(onemodel)
+      intT = as.numeric(coefonemodel[4,3])  # observed t-value
+      randDCL = subset(randSet, HeadNoun=="DCL")
+      onemodelDCL = summary(lm(target ~ cobject, randDCL))
+      coefonemodelDCL = coef(onemodelDCL)
+      dclstrT = as.numeric(coefonemodelDCL[2,3])  # observed t-value
+      randDE = subset(randSet, HeadNoun=="DE")
+      onemodelDE = summary(lm(target ~ cobject, randDE))
+      coefonemodelDE = coef(onemodelDE)
+      destrT = as.numeric(coefonemodelDE[2,3])  # observed t-value
+      
+      df = data.frame(t=intT,cluster=cl,time=b,sim=i,dclT=dclstrT,deT=destrT)
+      exptests = rbind(exptests, df )
+    }
+  }
+  save(exptests,file=filename)
+  return(exptests)
+}
+#exptests = createPermDist("permDistMan5.RData") # since this takes a lot of time, we save the values in a file.
+load("permDistMan5.RData") #this creates data frame exptests from file
+
+# we sum over clusters so that longer clusters have stronger t-values
+sumt.df =  aggregate(cbind(t,dclT,deT) ~cluster + sim, exptests, sum)
+head(sumt.df)
+
+# simulated sum cluster histogram
+p = ggplot(sumt.df,aes(x = t))
+p = p +geom_histogram(binwidth=0.5)
+p+theme_bw()
+
+```
+
+
+```{r}
+# this code extracts out the maximum sum t for each simulation at each age
+if (length(unique(sumt.df$cluster)) > 1){ # only run if there is more than one cluster
+maxclusterdist = data.frame()
+  for (s in unique(sumt.df$sim)) {
+    # get all results for one simulation in one HeadNounuage
+    onesim = subset(sumt.df,sim == s)
+    onesim$absT = abs(onesim$t)
+    onesim$absdclT = abs(as.numeric(onesim$dclT))
+    onesim$absdeT = abs(as.numeric(onesim$deT))
+    # find max t-value
+    maxrow = onesim[order(onesim$absT,decreasing = T),]
+    maxclusterdist = rbind(maxclusterdist,maxrow[1,])
+  }
+}else{
+  maxclusterdist = sumt.df
+}
+head(maxclusterdist)
+
+# Shows the simulated distribution with maximum cluster t values
+maxclusterdist2 = maxclusterdist[order(maxclusterdist$t),]
+#end = data.frame(xint = maxclusterdist2[c(25,975,1025,1975),]$t)
+p = ggplot(maxclusterdist,aes(x = t))
+p = p +geom_histogram(binwidth=0.5)
+#p = p +geom_vline(end,mapping=aes(xintercept=xint))
+p+theme_bw()
+
+```
+
+
+```{r}
+
+# maxclusterdist is sorted by HeadNounuage, 
+# this identifies tvalues that are greater than dist t-values
+for (cl in unique(sumcluster$cnum)){
+  bins = unique(means.df[means.df$cnum == cl,]$time)
+
+  # permtdist is the dist t-values, 
+  # so p value is proportion of values greater than observed t-value.
+  # absolute value gives two sided test
+  intT = abs(sumcluster$intT[sumcluster$cnum==cl])
+  intP = sum(abs(maxclusterdist$t) > intT, na.rm = TRUE)/length(maxclusterdist$t)
+  if (intP < 0.05){
+    print(paste("Cluster Interaction Term ",cl,"Obs.sum t",round(intT,3),"PropDist > observed p-value",intP))
+  }
+  
+  destrT = abs(sumcluster$destrT[sumcluster$cnum==cl])
+  deT = sum(abs(maxclusterdist$deT) > destrT, na.rm = TRUE)/length(maxclusterdist$deT)
+  if (deT < 0.05){
+    print(paste("Separate Test of deT only",cl,"Obs.sum t",round(destrT,3),"PropDist > observed p-value",deT))
+  }
+  
+  dclstrT = abs(sumcluster$dclstrT[sumcluster$cnum==cl])
+  dclT = sum(abs(maxclusterdist$dclT) > dclstrT, na.rm = TRUE)/length(maxclusterdist$dclT)
+  if (dclT < 0.05){
+    print(paste("Separate Test of dclT only",cl,"Obs.sum t",round(dclstrT,3),"PropDist > observed p-value",dclT))
+  }
+
+  means.df$permtestp[means.df$time %in% bins] = intP
+}
+
+means.df$HeadNoun = factor(means.df$HeadNoun,levels=c("DE","DCL"))
+onsetStim$HeadNoun = factor(onsetStim$HeadNoun,levels=c("DE","DCL"))
+# now we update our plot
+p = ggplot(means.df , aes( x = time, y = target, linetype=SentenceType))
+p = p + facet_wrap(~ HeadNoun, ncol=1)
+#print(p)
+# this pulls out the clusters which are significant by the permutation test
+meansigStr = subset(means.df,permtestp < 0.025) 
+# color them grey
+if (length(meansigStr$time) > 0){
+  p = p + geom_rect(data=meansigStr,aes(xmin=time-wsize-4, xmax=time+wsize+4, ymin = pliney+0.1, ymax= 1.0),colour=NA,fill="grey90",show.legend=FALSE)
+}
+# same as before
+p = p + geom_line()
+#p = p + scale_colour_brewer(palette="Set1")
+#p = p + scale_fill_brewer(palette="Set2")
+p = p + scale_linetype_discrete(name="RC Type")
+p = p + theme_bw()   # change background to white
+p = p + ylab("Target Proportion")
+p = p + xlab("Time (msecs)")
+#p = p + ylim(0,1)
+p = p + geom_rect(aes(xmin=time-wsize, xmax=time+wsize, ymin = plineyInt, ymax= plineintP, fill=plinecolintP),colour=NA,show.legend=FALSE)
+#p = p + geom_curve(data=meansigPost,aes(x=time+10, xend=time+winsize-10, y = 0.9, yend= 0.9),color="black",size=1, lineend = "square", curvature = -0.5, show.legend=FALSE)
+p = p + geom_rect(data=onsetStim,aes(xmin=time,xmax = time2-33, ymin=ypos-0.13, ymax=ypos,linetype=SentenceType),fill=NA,colour="black", show.legend=FALSE)
+p = p + geom_text(data=onsetStim,aes(x=(time+time2)/2, y=ypos-0.05, label=cat), hjust=0.7, size=3,show.legend=FALSE)
+p = p +scale_colour_grey()
+p = p +scale_fill_grey()
+apaformat(p)
+ggsave("permCan.png",width=8,height=8)
+```
+
+```{r,fig.height=3}
+accdf = read.csv("ManRC_accuracy_data_all_final.csv")
+
+accdf$cCL = ifelse(accdf$structure == "DemCL",0.5,-0.5)
+accdf$cobject = ifelse(accdf$extraction == "object",0.5,-0.5)
+accdf$participant=factor(accdf$participant)
+accdf$item = str_replace(accdf$item,"(S|O)","I")
+accdf$item=factor(accdf$item)
+xtabs( ~ structure + participant,accdf)
+xtabs( ~ extraction + participant,accdf)
+xtabs( ~ structure + item,accdf)
+xtabs( ~ extraction + item,accdf)
+
+acc.glm = glmer(Correct ~ cobject*cCL + (1 + extraction | participant) + (1 | item),accdf,family="binomial")
+print(summary(acc.glm))
+
+accdf$pred = remef(acc.glm, ran = "all")
+head(accdf)
+meandf = aggregate(Correct ~ extraction + structure, accdf, mean)
+print(meandf)
+# compute sd from pred without random effects
+meandf$sd = aggregate(pred ~ extraction + structure, accdf,sd)$pred
+print(meandf)
+# se is computed from sd divided by number of participants
+meandf$se = meandf$sd/sqrt( nlevels(accdf$participant) )
+meandf$upper = meandf$Correct + meandf$se
+meandf$lower = meandf$Correct - meandf$se
+print(meandf)
+meandf$extraction=factor(meandf$extraction,labels=c("Subject","Object"),levels=c("subject","object"))
+meandf$structure=factor(meandf$structure,labels=c("DE","DCL"))
+
+p = ggplot(meandf, aes(x=structure,y=Correct, fill=extraction,ymin = lower, ymax=upper))
+p = p +geom_bar(stat="identity",position="dodge")
+p = p +scale_fill_grey(name="RC Type")
+p = p + xlab("Sentence Type")
+p = p + geom_errorbar(width=0.25, position=position_dodge(.9) )
+apaformat(p)
+ggsave("accuracy.png",width=5,height=3)
+
+```
